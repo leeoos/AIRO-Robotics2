@@ -5,127 +5,121 @@
 % the new DH parameters
 
 clc
-clear all
 close all
 
-syms da dalpha dd dtheta theta a alpha d l1 l2 q1 q2 alpha1 alpha2 d1 d2 zero 
+syms da dalpha dd dtheta l1 l2 q1 q2 alpha1 alpha2 d1 d2 zero 
 
-%% DIRECT KINEMATICS
-% Write you task kinematics
+%% Inputs for the calibration problem
 
-r = [l1*cos(q1) + l2*cos(q1+q2); 
-     l1*sin(q1) + l2*sin(q1+q2)] 
+% Write here the task kinematics
+fprintf("Direct Kinematics \n\n");
+dir_kin = [ 
+    l1*cos(q1) + l2*cos(q1+q2); 
+    l1*sin(q1) + l2*sin(q1+q2);
+];
+disp(dir_kin);
 
-%% COMPUTATION OF REGRESSOR MATRIX
+% Arrays of symbolics DH parameters mantain the order alpha, a, d, theta
+% insert "zero" if you don't want calibrate that DH parameters
+alpha = [];
+a = [l1, l2];
+d = [];
+theta = [];
+sym_dh = {alpha, a, d, theta};
 
-% Put "zero" if you don't want calibrate that DH parameters
-% Otherwise, write symbolically the DH parameters 
-% (EX. "l1, q1..." AND SO ON!)
+% Insert here nominal values for DH parameters
+nominal_parameters = [
+    alpha,...
+    a,...
+    d,...
+    theta
+];
 
-alpha = [zero;
-         zero];
+% Pay attenction to the order: alpha, a, d, theta
+nominal_values = [
+    1,...
+    1
+];
 
-a = [l1;
-     l2];
+% Insert measured DH parameters 
+experimental_variables = [q1, q2];
+experimental_values = {[0,0], [pi/2,0], [pi/4,-pi/4], [0,pi/4]};
 
-d = [zero;
-     zero];
+% Insert here experimental variables data
+ee_measured_positions = [2; 0; 0; 2; 1.6925; 0.7425; 1.7218; 0.6718];
 
-theta = [zero;
-         zero];
+%% Computation of regression matrix
+PHI_sym = make_sym_regressor_matrix(dir_kin, sym_dh);
+fprintf("This is the regressor matrix: \n");
+disp(PHI_sym);
 
-% REMEMBER: comment the appropriate derivatives based on your DH
-% calibration parameters
+regressor_matrix = subs(PHI_sym, nominal_parameters, nominal_values);
+regressor_matrix = subs_airo(regressor_matrix, experimental_variables, experimental_values, 4);
 
-%% SINGLE EXPERIMENT
-
-jac_alpha = jacobian(r,alpha);
-jac_a = jacobian(r,a);
-jac_d = jacobian(r,d);
-jac_theta = jacobian(r,theta);
-
-PHI_sym = [];
-PHI_full_val = [];
-PHI_full_sym = [];
-
-if not(jac_alpha == zeros(2,2)) 
-    PHI_sym = [PHI_sym,jac_alpha];
-end
-
-if not(jac_a == zeros(2,2))
-    PHI_sym = [PHI_sym,jac_a];
-end
-
-if not(jac_d == zeros(2,2))
-    PHI_sym = [PHI_sym,jac_d];
-end
-
-if not(jac_theta == zeros(2,2))
-    PHI_sym = [PHI_sym, jac_theta];
-end
-
-% We have wrote the symbolically form of REGRESSOR MATRIX (1 EXPERIMENT!)
-fprintf("This is the regressor matrix: \n")
-
-PHI_sym
-
-%% MULTIPLE EXPERIMENT
-
-% COMPUTATION OF REQUIRED MATRICIES (FULL EVALUATE MEASURES AND REGRESSOR)
-% These are symbolic parameters used for evaluation of FULL MATRICIES
-% ATTENTION: CHANGE THESE IN BASE OF EVALUATION TASK 
-% !!! RESPECT ORDER -> alpha,a,d,theta !!! 
-% EX. You want to evaluate a, d? Ok, write -> phi_sym=[a,d]
-phi_sym = [l1,l2,q1,q2];
-
-% Change p_meas, q_meas and phi_nom depending on your exercise
-p_meas = [2;0;0;2;1.6925;0.7425;1.7218;0.6718];
-% !!! ATTENTION ORDER l1,l2,q1,q2 !!!
-phi_val = {[1,1,0,0], [1,1,pi/2,0], [1,1,pi/4,-pi/4], [1,1,0,pi/4]};
-phi_nom = {[1; 1]};  % phi_nom = {[alpha],[a],[d],[theta]}
-Dr_full = [];
+%% Multiple experiments
 l = 4; % Number of measurements
 
-PHI_full_val = subs_airo(PHI_sym, phi_sym, phi_val, l);
-r_sub = subs_airo(r, phi_sym, phi_val, l);
-Dr_full = p_meas - r_sub;
+PHI_full_val = regressor_matrix;
+
+dir_kin_sub = subs(dir_kin,nominal_parameters, nominal_values);
+dir_kin_sub = subs_airo(dir_kin_sub, experimental_variables, experimental_values, l);
+Dr_full = ee_measured_positions - dir_kin_sub;
 
 PHI_full_val = round(vpa(PHI_full_val),3)
-Dr_full = round(vpa(Dr_full),6)
+Dr_full = round(vpa(Dr_full),3)
 
-% ITERATION FOR DELTA PHI
+% Iteration steps
+delta_phi_values = {};
+phi_prime_values = {};
+phi_prime = transpose(nominal_values);
 
 eps = 10^-6;
-Dphi = eps + 1;
-% THESE ARE THE COSTANT (NOT CHANGE AFTER CALIBRATION) VALUES
-phi_val = {[0,0], [pi/2,0], [pi/4,-pi/4], [0,pi/4]};
-i=0;
-condition=1;
-old_max = 10^10
-phi_prime=phi_nom;
-while (abs(max(Dphi)) > eps)
-    i=i+1
+delta_phi = eps + 1;
 
-    pinv_PHI = round(vpa(pinv(PHI_full_val)),3)
-    Dphi = round(vpa(pinv_PHI*Dr_full),6)
-    fprintf("These are the calibrated DH parameters at first step: \n")
-    phi_prime = phi_prime+Dphi
-    PHI_sym_tmp = subs(PHI_sym, a, phi_prime) % Evaluate l1,l2
-    PHI_full_val = subs_airo(PHI_sym_tmp, [q1,q2], phi_val, l) % Evaluate theta
+number_of_iterations = 0;
+%while (abs(max(delta_phi)) > eps)
+while (number_of_iterations < 5)
+    number_of_iterations = number_of_iterations + 1;
+    disp(number_of_iterations);
     
-    r_sub_tmp = subs(r, a, phi_prime); % Evaluate l1,l2
-    r_sub = subs_airo(r_sub_tmp, [q1,q2], phi_val, l); % Evaluate q1,q2
-    Dr_full = p_meas - r_sub;
-    Dr_full = round(vpa(Dr_full),6)
+    % Algorithm
+    pinv_PHI = round(vpa(pinv(PHI_full_val)),3);
+    delta_phi = round(vpa(pinv_PHI*Dr_full),3);
+    delta_phi_values{end + 1} = delta_phi;
+
+    phi_prime = phi_prime + delta_phi;
+    phi_prime_values{end + 1} = phi_prime;
+
+    PHI_sym_tmp = subs(PHI_sym, nominal_parameters', phi_prime);
+    PHI_full_val = subs_airo(PHI_sym, experimental_variables, experimental_values, l);
+    PHI_full_val = round(vpa(PHI_full_val),3);
+
+    dir_kin_sub = subs(dir_kin,nominal_parameters', phi_prime);
+    dir_kin_sub = subs_airo(dir_kin_sub, experimental_variables, experimental_values, l);
+    Dr_full = round(vpa(ee_measured_positions - dir_kin_sub), 3);
     
 end
 
+celldisp(delta_phi_values);
+celldisp(phi_prime_values);
 
-%% FUNCTION TO DO SUBSTITUTION
+%% Functions
 
-function subs_mat = subs_airo (mat_sym, symb, val, index)
+function output_matrix = make_sym_regressor_matrix(input_matrix, symbols)
+    accumulator = [];
+    for i = (1 : size(symbols,2))
+        if not(isempty(symbols{i}))
+            partial_jacobian = jacobian(input_matrix, symbols{i});
+        %if not(partial_jacobian == zeros(size(partial_jacobian))) 
+            accumulator = [accumulator, partial_jacobian];
+        end
+    end
+    output_matrix = accumulator;
+end
+
+function subs_mat = subs_airo(mat_sym, symb, val, index)
     mat_out = [];
-    for i=1:index
+    for i = (1 : index)
         new_row = subs(mat_sym, symb, val{i});
         mat_out = [mat_out; new_row];
     end
